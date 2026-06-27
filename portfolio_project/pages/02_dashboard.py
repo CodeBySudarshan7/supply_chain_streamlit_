@@ -220,6 +220,37 @@ def build_period_summary(df: pd.DataFrame, range_labels, period_type):
     return pd.DataFrame(rows)
 
 
+def calculate_business_components(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    df["profit"] = (
+        pd.to_numeric(df["revenue_generated"], errors="coerce").fillna(0)
+        - pd.to_numeric(df["costs"], errors="coerce").fillna(0)
+    )
+    df["inventory_value"] = (
+        pd.to_numeric(df["price"], errors="coerce").fillna(0)
+        * pd.to_numeric(df["stock_levels"], errors="coerce").fillna(0)
+    )
+
+    order_statuses = []
+    for _, row in df.iterrows():
+        availability = pd.to_numeric(row.get("availability", 0), errors="coerce")
+        order_quantity = pd.to_numeric(row.get("order_quantities", 0), errors="coerce")
+        if pd.isna(availability):
+            availability = 0
+        if pd.isna(order_quantity):
+            order_quantity = 0
+
+        if availability > order_quantity:
+            order_statuses.append("Healthy")
+        elif order_quantity > 0:
+            order_statuses.append("Pending")
+        else:
+            order_statuses.append("Low Stock")
+
+    df["order_status"] = order_statuses
+    return df
+
+
 def render_comparison_metric_cards(period_values):
     if len(period_values) != 2:
         return
@@ -423,6 +454,77 @@ st.markdown(
     ),
     unsafe_allow_html=True,
 )
+
+business_df = calculate_business_components(filtered)
+
+st.markdown("---")
+st.subheader("💼 Business Components")
+
+kpi_cols = st.columns(3)
+with kpi_cols[0]:
+    st.metric("Profit", f"${business_df['profit'].sum():,.2f}")
+with kpi_cols[1]:
+    st.metric("Inventory Value", f"${business_df['inventory_value'].sum():,.2f}")
+with kpi_cols[2]:
+    st.metric("Order Status", f"{business_df['order_status'].value_counts().idxmax()}" )
+
+perf_cols = st.columns(3)
+with perf_cols[0]:
+    st.metric("Delivery Performance", f"{business_df['shipping_times'].mean():.1f} days avg")
+with perf_cols[1]:
+    top_customer = business_df.groupby("customer_demographics")["revenue_generated"].sum().sort_values(ascending=False)
+    st.metric("Top Customer Segment", top_customer.index[0] if not top_customer.empty else "N/A")
+with perf_cols[2]:
+    supplier_score = business_df.groupby("supplier_name")["defect_rates"].mean().sort_values()
+    st.metric("Best Supplier", supplier_score.index[0] if not supplier_score.empty else "N/A")
+
+c1, c2 = st.columns(2, gap="large")
+with c1:
+    profit_summary = business_df.groupby("product_type")["profit"].sum().reset_index().sort_values("profit", ascending=False)
+    fig_profit = px.bar(profit_summary, x="product_type", y="profit", color="product_type", title="Profit by Product Type")
+    fig_profit.update_layout(height=420, margin=dict(t=40, b=20, l=20, r=20), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="#14182d")
+    st.plotly_chart(fig_profit, use_container_width=True)
+
+with c2:
+    order_status_counts = business_df["order_status"].value_counts().reset_index()
+    order_status_counts.columns = ["status", "count"]
+    fig_orders = px.pie(order_status_counts, names="status", values="count", title="Order Status")
+    fig_orders.update_layout(height=420, margin=dict(t=40, b=20, l=20, r=20), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="#14182d")
+    st.plotly_chart(fig_orders, use_container_width=True)
+
+c1, c2 = st.columns(2, gap="large")
+with c1:
+    delivery_summary = business_df.groupby("shipping_carriers").agg(
+        avg_shipping_time=("shipping_times", "mean"),
+        avg_shipping_cost=("shipping_costs", "mean"),
+        shipments=("sku", "count"),
+    ).reset_index()
+    fig_delivery = px.bar(delivery_summary, x="shipping_carriers", y="avg_shipping_time", color="shipping_carriers", title="Delivery Performance by Carrier")
+    fig_delivery.update_layout(height=420, margin=dict(t=40, b=20, l=20, r=20), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="#14182d")
+    st.plotly_chart(fig_delivery, use_container_width=True)
+
+with c2:
+    customer_summary = business_df.groupby("customer_demographics")["revenue_generated"].sum().reset_index().sort_values("revenue_generated", ascending=False).head(8)
+    fig_customers = px.bar(customer_summary, x="customer_demographics", y="revenue_generated", color="customer_demographics", title="Top Customers by Revenue")
+    fig_customers.update_layout(height=420, margin=dict(t=40, b=20, l=20, r=20), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="#14182d")
+    st.plotly_chart(fig_customers, use_container_width=True)
+
+c1, c2 = st.columns(2, gap="large")
+with c1:
+    supplier_summary = business_df.groupby("supplier_name").agg(
+        total_revenue=("revenue_generated", "sum"),
+        avg_defect_rate=("defect_rates", "mean"),
+        avg_lead_time=("lead_times", "mean"),
+    ).reset_index().sort_values("total_revenue", ascending=False).head(8)
+    fig_supplier = px.scatter(supplier_summary, x="avg_defect_rate", y="total_revenue", size="avg_lead_time", color="supplier_name", hover_name="supplier_name", title="Supplier Performance")
+    fig_supplier.update_layout(height=420, margin=dict(t=40, b=20, l=20, r=20), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="#14182d")
+    st.plotly_chart(fig_supplier, use_container_width=True)
+
+with c2:
+    inventory_summary = business_df.groupby("product_type")["inventory_value"].sum().reset_index().sort_values("inventory_value", ascending=False)
+    fig_inventory = px.bar(inventory_summary, x="product_type", y="inventory_value", color="product_type", title="Inventory Value by Product Type")
+    fig_inventory.update_layout(height=420, margin=dict(t=40, b=20, l=20, r=20), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="#14182d")
+    st.plotly_chart(fig_inventory, use_container_width=True)
 
 if not period_comparison_df.empty:
     st.markdown("---")

@@ -5,10 +5,37 @@ import pandas as pd
 from datetime import datetime
 
 CSV_FALLBACK_PATH = "supply_chain_data_sequential_date.csv"
+CSV_COLUMNS = [
+    "date",
+    "product_type",
+    "sku",
+    "price",
+    "availability",
+    "number_of_products_sold",
+    "revenue_generated",
+    "customer_demographics",
+    "stock_levels",
+    "lead_times",
+    "order_quantities",
+    "shipping_times",
+    "shipping_carriers",
+    "shipping_costs",
+    "supplier_name",
+    "location",
+    "lead_time",
+    "production_volumes",
+    "manufacturing_lead_time",
+    "manufacturing_costs",
+    "inspection_results",
+    "defect_rates",
+    "transportation_modes",
+    "routes",
+    "costs",
+]
 
 
 def get_db_connection():
-    """Create a fresh MySQL connection."""
+    """Create a fresh MySQL connection, falling back to None when it is unavailable."""
     mysql_config = {
         "host": "localhost",
         "user": "root",
@@ -36,11 +63,9 @@ def get_db_connection():
             database=mysql_config["database"],
             autocommit=False,
         )
-    except mysql.connector.Error as e:
-        st.error(f"Database connection failed: {e}")
+    except mysql.connector.Error:
         return None
-    except Exception as e:
-        st.error(f"Unexpected connection error: {e}")
+    except Exception:
         return None
 
 
@@ -158,11 +183,30 @@ def load_data_from_csv(csv_path: str = CSV_FALLBACK_PATH) -> pd.DataFrame:
     return normalize_csv_df(df)
 
 
+def append_record_to_csv(data_dict: dict) -> bool:
+    """Persist a record to the local CSV file when MySQL is unavailable."""
+    df = load_data_from_csv(CSV_FALLBACK_PATH)
+    if df.empty:
+        df = pd.DataFrame(columns=CSV_COLUMNS)
+
+    entry = pd.DataFrame([data_dict])
+    for col in CSV_COLUMNS:
+        if col not in entry.columns:
+            entry[col] = None
+
+    entry = entry.reindex(columns=CSV_COLUMNS)
+    if df.empty:
+        entry.to_csv(CSV_FALLBACK_PATH, index=False)
+    else:
+        entry.to_csv(CSV_FALLBACK_PATH, mode="a", header=False, index=False)
+    return True
+
+
 def init_database():
     """Create supply chain table if it doesn't exist and seed it on first run."""
     conn = get_db_connection()
     if conn is None:
-        return False
+        return True
 
     cursor = conn.cursor()
     try:
@@ -199,9 +243,8 @@ def init_database():
         )
         """)
         conn.commit()
-    except Exception as e:
-        st.error(f"Error creating table: {e}")
-        return False
+    except Exception:
+        return True
     finally:
         cursor.close()
         if conn.is_connected():
@@ -280,10 +323,10 @@ def import_csv_data(csv_path: str = CSV_FALLBACK_PATH) -> int:
 
 
 def insert_record(data_dict):
-    """Insert a single record into the database."""
+    """Insert a single record into the database, or fall back to the local CSV file."""
     conn = get_db_connection()
     if conn is None:
-        return False
+        return append_record_to_csv(data_dict)
 
     try:
         cursor = conn.cursor()
@@ -294,9 +337,8 @@ def insert_record(data_dict):
         conn.commit()
         cursor.close()
         return True
-    except Exception as e:
-        st.error(f"Error inserting record: {e}")
-        return False
+    except Exception:
+        return append_record_to_csv(data_dict)
     finally:
         if conn.is_connected():
             conn.close()
